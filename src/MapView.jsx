@@ -12,24 +12,24 @@ export default function MapView() {
     // =====================================================================
     // 1. CESIUM — the BASE map
     // ---------------------------------------------------------------------
-    // Raster source: NASA GIBS "Blue Marble", served on a
-    // GeographicTilingScheme => EPSG:4326. Unlike the bundled Natural Earth II
-    // (native level ~2, so it just upsamples into a blur when you zoom in),
-    // GIBS has real tile levels (0–7 @ 500m/px), so zooming loads sharper
-    // tiles. We force the scene projection to Web Mercator (EPSG:3857), so
-    // Cesium still reprojects the 4326 tiles to 3857 on the GPU for display.
+    // Raster source: NASA GIBS "Blue Marble" in EPSG:4326, via WMS.
+    // Why WMS and not WMTS: GIBS's 4326 WMTS tile-matrix sets use an irregular
+    // grid (2x1, 3x2, 5x3, 10x5, 20x10, ...) that does NOT match Cesium's
+    // GeographicTilingScheme power-of-two grid, so WMTS tiles land in the wrong
+    // place (Israel would show Pacific ocean). WMS is bounding-box based, so
+    // Cesium's tiling scheme just asks for each tile's 4326 bbox and gets
+    // correctly-placed imagery. The scene projection is Web Mercator
+    // (EPSG:3857), so Cesium reprojects the 4326 imagery to 3857 on the GPU.
     // (Requires network access.)
     // =====================================================================
-    const baseProvider = new Cesium.WebMapTileServiceImageryProvider({
-      url: 'https://gibs.earthdata.nasa.gov/wmts/epsg4326/best/wmts.cgi',
-      layer: 'BlueMarble_ShadedRelief_Bathymetry',
-      style: 'default',
-      format: 'image/jpeg',
-      tileMatrixSetID: '500m',
-      maximumLevel: 7, // top level of the GIBS "500m" set (level 8 returns 400)
+    const baseProvider = new Cesium.WebMapServiceImageryProvider({
+      url: 'https://gibs.earthdata.nasa.gov/wms/epsg4326/best/wms.cgi',
+      layers: 'BlueMarble_ShadedRelief_Bathymetry',
+      parameters: { format: 'image/jpeg', transparent: false },
+      tilingScheme: new Cesium.GeographicTilingScheme(), // EPSG:4326 source
       tileWidth: 512,
       tileHeight: 512,
-      tilingScheme: new Cesium.GeographicTilingScheme(), // EPSG:4326 source
+      maximumLevel: 7, // Blue Marble is ~500 m/px; deeper just upsamples
     });
     const baseLayer = new Cesium.ImageryLayer(baseProvider);
 
@@ -54,14 +54,11 @@ export default function MapView() {
     // and drives the camera through the sync function below.
     viewer.scene.screenSpaceCameraController.enableInputs = false;
 
-    // Render ON DEMAND instead of on a free-running loop. Because Leaflet
-    // drives the camera, a separate render loop just repaints a frame behind
-    // the sync (and can drop frames independently), so the base map visibly
-    // lags the overlay during a zoom/pan. Repainting only when we sync it
-    // (see syncCesium) locks the base's motion to the overlay's.
-    // Imagery tile loads still request their own renders automatically.
-    viewer.scene.requestRenderMode = true;
-    viewer.scene.maximumRenderTimeChange = Infinity;
+    // Keep the default continuous render loop. requestRenderMode leaves
+    // Cesium's (non-preserved) WebGL buffer showing stale frames between its
+    // infrequent renders — which looks like the map "jumping" to an old view.
+    // Continuous rendering keeps the canvas always current, and syncCesium
+    // also renders on each 'move' so the base stays locked to the overlay.
 
     // Proof of the projection setup (visible in the console).
     console.log('[cesium] display projection :', viewer.scene.mapProjection.constructor.name);

@@ -10,11 +10,11 @@ sync, with projection reprojection and gated navigation.
 | Cesium is the **base** map | `#cesiumContainer` at `z-index: 1`, renders the raster basemap |
 | Leaflet **above** it | `#leafletContainer` at `z-index: 2`, transparent background |
 | Two Leaflet entities | a `L.polygon` and a `L.circleMarker` (vector — no marker-image bundling issues) |
-| Raster in **EPSG:4326** | NASA GIBS "Blue Marble" via WMTS on a `GeographicTilingScheme` = 4326 (needs network) |
+| Raster in **EPSG:4326** | NASA GIBS "Blue Marble" via **WMS** (`epsg4326` endpoint) on a `GeographicTilingScheme` = 4326 (needs network) |
 | Map shown in **EPSG:3857** | scene `mapProjection: new WebMercatorProjection()`; Cesium reprojects 4326→3857 on the GPU |
 | Move only with **Space + left click** | Leaflet's built-in pan handler is off; drag is enabled only while `Space` is held |
 | Zoom always available | custom `requestAnimationFrame`-eased, cursor-anchored wheel zoom (not gated on Space) |
-| Libraries **synced** | on every Leaflet `move`, Cesium is framed to Leaflet's exact bounds and repainted in the same tick |
+| Libraries **synced** | on every Leaflet `move`, Cesium is centered via `setView` and its 2D frustum is set directly from the projected bounds |
 
 ## Run
 
@@ -35,19 +35,26 @@ tiling scheme (`GeographicTilingScheme`) logged.
   input. Cesium's own camera controls are disabled (`enableInputs = false`) and it is
   driven purely from Leaflet's bounds. This avoids a feedback loop. Bidirectional sync
   is easy to add if Cesium ever needs to accept input too.
-- **Why bounds-rectangle sync?** Both libraries display in Web Mercator, and the two
-  containers are the same size (same aspect ratio). Handing Cesium the exact lat/lng
-  rectangle Leaflet shows makes Cesium fill the viewport identically.
+- **Why set the frustum directly (not `setView` with a rectangle)?** In Cesium's 2D
+  mode, `camera.setView({ destination: rectangle })` fits the rectangle using the
+  frustum's aspect ratio and, on non-square viewports, zooms out by the H/W factor —
+  the base ends up mis-scaled vs the overlay. So `syncCesium` uses `setView` only to
+  **center**, then sets the `OrthographicOffCenterFrustum` `left/right/top/bottom`
+  directly from the Web Mercator projection of Leaflet's bounds. Aspect-proof; verified
+  pixel-identical to Leaflet in portrait, square, and landscape.
+- **Continuous rendering (not `requestRenderMode`).** `requestRenderMode` leaves
+  Cesium's non-preserved WebGL buffer showing stale frames between its infrequent
+  renders (the map appears stuck on an old view). The default continuous loop keeps the
+  canvas current; `syncCesium` also renders on each `move` so the base stays locked to
+  the overlay.
 - **Navigation gating:** panning (left-drag) only works while `Space` is held; zoom
-  (scroll wheel) is always available. To also gate zoom behind Space, disable the custom
-  wheel handler and toggle it in the Space key handlers.
-- **Smooth zoom in lockstep:** the wheel handler eases toward a target zoom in small
-  fractional steps (`zoomSnap: 0`) on each animation frame. Cesium is set to render
-  on demand (`requestRenderMode`) and repainted synchronously inside the sync, so the
-  base map updates in the same frame as the overlay instead of drifting on its own loop.
-- **Raster detail / zoom cap:** GIBS "Blue Marble" is served from the `500m` tile matrix
-  set, whose deepest level is **7** (`maximumLevel: 7`; level 8 returns HTTP 400). The
-  map's `maxZoom` is capped to 7 to match, so you never zoom past the native resolution
-  into a blur. For finer detail you'd swap in a higher-resolution EPSG:4326 layer.
+  (scroll wheel) is always available. Smooth zoom eases toward a target in fractional
+  steps (`zoomSnap: 0`) via `requestAnimationFrame`.
+- **Why WMS and not WMTS for GIBS?** GIBS's EPSG:4326 **WMTS** tile-matrix sets use an
+  irregular grid (`2×1, 3×2, 5×3, 10×5, 20×10, …`) that does **not** match Cesium's
+  `GeographicTilingScheme` power-of-two grid, so WMTS tiles land in the wrong place
+  (Israel would render Pacific ocean). The **WMS** endpoint is bounding-box based, so
+  Cesium's tiling scheme just requests each tile's 4326 bbox and gets correctly-placed
+  imagery. Blue Marble is ~500 m/px, so `maximumLevel`/`maxZoom` are capped at 7.
 - No Cesium Ion token needed — the base layer is overridden with the GIBS provider, so
   nothing hits Ion.
